@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jev-bisect"
+version = "0.1.0"
+description = "Find numeric answers with Jev's higher/lower/exactly choices."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["typesafe-sdk>=0.7.2,<0.8"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.12", "build>=1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jev_bisect"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
