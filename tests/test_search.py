@@ -8,6 +8,7 @@ from typesafe_sdk import TypeSafeClient
 
 from jev_bisect import (
     Direction,
+    SearchConfig,
     SearchExhaustedError,
     SearchState,
     advance,
@@ -55,7 +56,7 @@ class Oracle:
 def test_fractional_search_updates_bounds_and_preserves_input():
     state = {"max": 100, "min": 0, "last_guess": 50}
     client = Oracle(target=62.5)
-    result = bisect(state, "What is the target?", client=client)
+    result = bisect("What is the target?", **state, client=client)
     assert result.answer == 62.5
     assert result.converged
     assert result.stop_reason == "exactly"
@@ -76,15 +77,115 @@ def test_fractional_search_updates_bounds_and_preserves_input():
     assert result.history[0].confidence == 0.9
 
 
+@pytest.mark.parametrize("integer, initial_guess", [(False, 2.5), (True, 2)])
+def test_omitted_guess_starts_at_midpoint(integer, initial_guess):
+    state = {"max": 5, "min": 0}
+    client = Oracle(initial_guess)
+    result = bisect("Target?", **state, client=client, integer=integer)
+    assert result.answer == initial_guess
+    assert result.turns == 1
+    assert client.requests[0]["state"]["last_guess"] == initial_guess
+    assert state == {"max": 5, "min": 0}
+
+
+@pytest.mark.parametrize("integer", [False, True])
+def test_omitted_guess_runs_multiple_turns(integer):
+    result = bisect("Target?", max=100, min=0, client=Oracle(75), integer=integer)
+    assert result.answer == 75
+    assert [turn.state.last_guess for turn in result.history] == [50, 75]
+
+
+@pytest.mark.parametrize("guess", [0, 10])
+def test_explicit_guess_is_evaluated_first(guess):
+    result = bisect("Target?", max=100, min=0, last_guess=guess, client=Oracle(guess))
+    assert result.answer == guess
+    assert result.turns == 1
+
+
+@pytest.mark.parametrize("integer, expected", [(False, 2.5), (True, 2)])
+def test_none_guess_starts_at_midpoint(integer, expected):
+    result = bisect(
+        "Target?",
+        min=0,
+        max=5,
+        last_guess=None,
+        client=Oracle(expected),
+        integer=integer,
+    )
+    assert result.answer == expected
+    assert result.turns == 1
+
+
+@pytest.mark.parametrize(
+    "args, kwargs",
+    [
+        (("Target?",), {"min": 0}),
+        (("Target?",), {"max": 100}),
+        (("Target?", 0, 100), {}),
+    ],
+)
+def test_bounds_are_required_keyword_arguments(args, kwargs):
+    with pytest.raises(TypeError):
+        bisect(*args, **kwargs)
+
+
+def test_advance_with_omitted_guess_applies_choice_to_midpoint():
+    assert advance("higher", max=100, min=0).to_dict() == {
+        "max": 100,
+        "min": 50.0,
+        "last_guess": 75.0,
+    }
+
+
+@pytest.mark.parametrize("integer", [False, True])
+def test_equal_bounds_supply_the_only_guess(integer):
+    result = bisect("Target?", max=3, min=3, client=Oracle(3), integer=integer)
+    assert result.answer == 3
+    assert result.turns == 1
+
+
+@pytest.mark.parametrize(
+    "state, integer",
+    [
+        ({"max": 0, "min": 5}, False),
+        ({"max": float("inf"), "min": 0}, False),
+        ({"max": 5, "min": True}, False),
+        ({"max": 5.0, "min": 0}, True),
+    ],
+)
+def test_invalid_bounds_without_guess_are_rejected(state, integer):
+    client = Oracle(0)
+    with pytest.raises(ValueError):
+        bisect("Target?", **state, client=client, integer=integer)
+    assert not client.requests
+
+
+def test_large_integer_bounds_initialize_without_losing_precision():
+    base = 10**400
+    result = bisect(
+        "Target?", max=base + 10, min=base, client=Oracle(base + 5), integer=True
+    )
+    assert result.answer == base + 5
+    assert result.turns == 1
+
+
 @pytest.mark.parametrize("choice, expected", [("higher", 75), ("lower", 25)])
 def test_advance_halves_distance(choice, expected):
     state = SearchState(max=100, min=0, last_guess=50)
-    assert advance(state, choice).last_guess == expected
-    assert advance(state, "exactly") is state
+    assert (
+        advance(
+            choice, min=state.min, max=state.max, last_guess=state.last_guess
+        ).last_guess
+        == expected
+    )
+    assert (
+        advance("exactly", min=state.min, max=state.max, last_guess=state.last_guess)
+        == state
+    )
 
 
 def test_exactly_stops_at_initial_guess():
-    result = bisect({"max": 2, "min": 2, "last_guess": 2}, "Target?", client=Oracle(2))
+    result = bisect("Target?", max=2, min=2, last_guess=2, client=Oracle(2))
     assert result.answer == 2
     assert result.turns == 1
 
@@ -93,10 +194,7 @@ def test_exactly_stops_at_initial_guess():
 def test_integer_search_finds_every_value_including_endpoints(target):
     client = Oracle(target)
     result = bisect(
-        {"max": 10, "min": -10, "last_guess": 0},
-        "Target integer?",
-        client=client,
-        integer=True,
+        "Target integer?", max=10, min=-10, last_guess=0, client=client, integer=True
     )
     assert result.answer == target
     assert result.turns <= 6
@@ -107,10 +205,11 @@ def test_integer_search_finds_every_value_including_endpoints(target):
 def test_turn_limit_is_exact_and_does_not_claim_convergence(limit):
     client = Oracle(choices=["higher"] * 20)
     result = bisect(
-        {"max": 100, "min": 0, "last_guess": 50},
         "Target?",
+        max=100,
+        min=0,
         client=client,
-        max_turns=limit,
+        config=SearchConfig(max_turns=limit),
     )
     assert len(client.requests) == result.turns == limit
     assert result.stop_reason == "max_turns"
@@ -122,8 +221,10 @@ def test_turn_limit_is_exact_and_does_not_claim_convergence(limit):
 
 def test_exactly_on_twentieth_turn_wins_over_limit():
     result = bisect(
-        {"max": 100, "min": 0, "last_guess": 50},
         "Target?",
+        max=100,
+        min=0,
+        last_guess=50,
         client=Oracle(choices=["higher"] * 19 + ["exactly"]),
     )
     assert result.converged
@@ -141,24 +242,26 @@ def test_exactly_on_twentieth_turn_wins_over_limit():
 )
 def test_impossible_direction_or_precision_stops(state, choice):
     with pytest.raises(SearchExhaustedError):
-        advance(state, choice)
+        advance(choice, **state)
     client = Oracle(choices=[choice])
-    result = bisect(state, "Target?", client=client)
+    result = bisect("Target?", **state, client=client)
     assert result.stop_reason == "stalled"
     assert result.turns == 1
     assert result.answer is None
 
 
 def test_extreme_opposite_bounds_do_not_overflow_midpoint():
-    state = advance({"max": 1e308, "min": -1e308, "last_guess": -1e308}, "higher")
+    state = advance("higher", max=1e308, min=-1e308, last_guess=-1e308)
     assert state.last_guess == 0.0
 
 
 def test_large_integer_search_preserves_precision():
     base = 10**400
     result = bisect(
-        {"max": base + 10, "min": base, "last_guess": base + 5},
         "Target?",
+        max=base + 10,
+        min=base,
+        last_guess=base + 5,
         client=Oracle(base + 9),
         integer=True,
     )
@@ -179,17 +282,14 @@ def test_large_integer_search_preserves_precision():
 def test_invalid_state_is_rejected_before_request(state):
     client = Oracle(1)
     with pytest.raises(ValueError):
-        bisect(state, "Target?", client=client)
+        bisect("Target?", **state, client=client)
     assert not client.requests
 
 
 @pytest.mark.parametrize(
     "options",
     [
-        {"max_turns": 0},
-        {"max_turns": 21},
-        {"max_turns": True},
-        {"max_turns": 1.5},
+        {"config": {}},
         {"integer": True},
         {"integer": "yes"},
         {"model": ""},
@@ -197,24 +297,35 @@ def test_invalid_state_is_rejected_before_request(state):
 )
 def test_invalid_options_are_rejected(options):
     with pytest.raises(ValueError):
-        bisect({"max": 10.0, "min": 0, "last_guess": 5}, "Target?", **options)
+        bisect("Target?", max=10.0, min=0, last_guess=5, **options)
+
+
+@pytest.mark.parametrize("limit", [0, -1, 21, True, 1.5, None, "20"])
+def test_config_rejects_invalid_guess_limits(limit):
+    with pytest.raises(ValueError, match="max_turns"):
+        SearchConfig(max_turns=limit)
+
+
+@pytest.mark.parametrize("config", [None, SearchConfig()])
+def test_default_config_limits_evaluations_to_twenty(config):
+    client = Oracle(choices=["higher"] * 21)
+    result = bisect("Target?", min=0, max=100, client=client, config=config)
+    assert result.turns == len(client.requests) == 20
+    assert result.stop_reason == "max_turns"
+    assert result.answer is None
 
 
 @pytest.mark.parametrize("question", ["", " ", None, 5])
 def test_invalid_question_is_rejected(question):
     with pytest.raises(ValueError):
-        bisect({"max": 10, "min": 0, "last_guess": 5}, question)
+        bisect(question, max=10, min=0, last_guess=5)
 
 
 def test_unknown_choice_is_rejected():
     with pytest.raises(ValueError):
-        advance({"max": 10, "min": 0, "last_guess": 5}, "maybe")
+        advance("maybe", max=10, min=0, last_guess=5)
     with pytest.raises(ValueError):
-        bisect(
-            {"max": 10, "min": 0, "last_guess": 5},
-            "Target?",
-            client=Oracle(choices=["maybe"]),
-        )
+        bisect("Target?", max=10, min=0, last_guess=5, client=Oracle(choices=["maybe"]))
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -229,9 +340,9 @@ def test_owned_client_closes_even_on_error(monkeypatch, fail):
     monkeypatch.setattr("jev_bisect.search.TypeSafeClient", lambda **kwargs: client)
     if fail:
         with pytest.raises(RuntimeError, match="API failed"):
-            bisect({"max": 10, "min": 0, "last_guess": 5}, "Target?")
+            bisect("Target?", max=10, min=0, last_guess=5)
     else:
-        assert bisect({"max": 10, "min": 0, "last_guess": 5}, "Target?").answer == 5
+        assert bisect("Target?", max=10, min=0, last_guess=5).answer == 5
     assert client.closed
 
 
@@ -270,8 +381,10 @@ def test_real_sdk_serialization_and_response_parsing(monkeypatch):
         lambda: TypeSafeClient(transport=httpx2.MockTransport(handle)),
     )
     result = bisect(
-        {"max": 100, "min": 0, "last_guess": 50},
         "How many centimeters are in three quarters of a meter?",
+        max=100,
+        min=0,
+        last_guess=50,
     )
     assert result.answer == 75
     assert len(requests) == 2

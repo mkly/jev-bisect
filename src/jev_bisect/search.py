@@ -1,5 +1,3 @@
-"""Keep the search arithmetic in Python; ask Jev only for a direction."""
-
 from __future__ import annotations
 
 import math
@@ -25,8 +23,22 @@ class SearchExhaustedError(ValueError):
 
 
 @dataclass(frozen=True)
+class SearchConfig:
+    """Optional search settings; each evaluated guess consumes one turn."""
+
+    max_turns: int = MAX_TURNS
+
+    def __post_init__(self) -> None:
+        if type(self.max_turns) is not int or not 1 <= self.max_turns <= MAX_TURNS:
+            raise ValueError(f"max_turns must be an integer from 1 to {MAX_TURNS}")
+
+
+@dataclass(frozen=True)
 class SearchState:
-    """Inclusive bounds and the guess to evaluate next."""
+    """Inclusive bounds and an existing guess to evaluate next.
+
+    Pass min and max to bisect to generate the initial guess.
+    """
 
     max: Number
     min: Number
@@ -78,8 +90,35 @@ class SearchResult:
         return len(self.history)
 
 
-def _state(value: SearchState | Mapping[str, Number]) -> SearchState:
-    return value if isinstance(value, SearchState) else SearchState(**value)
+def _midpoint(low: Number, high: Number, integer: bool) -> Number:
+    if low == high:
+        return low
+    if integer:
+        return (low + high) // 2
+    # Avoid overflowing high-low when bounds straddle zero.
+    try:
+        return low / 2 + high / 2 if low < 0 < high else low + (high - low) / 2
+    except OverflowError as exc:
+        raise SearchExhaustedError(
+            "bounds exceed floating-point range; use integer mode"
+        ) from exc
+
+
+def _initial_state(
+    *, min: Number, max: Number, last_guess: Number | None, integer: bool
+) -> SearchState:
+    # Validate the bounds before computing the initial guess.
+    bounds = SearchState(
+        max=max, min=min, last_guess=min if last_guess is None else last_guess
+    )
+    _validate_integer(bounds, integer)
+    if last_guess is not None:
+        return bounds
+    return SearchState(
+        max=bounds.max,
+        min=bounds.min,
+        last_guess=_midpoint(bounds.min, bounds.max, integer),
+    )
 
 
 def _validate_integer(state: SearchState, integer: bool) -> None:
@@ -90,9 +129,11 @@ def _validate_integer(state: SearchState, integer: bool) -> None:
 
 
 def advance(
-    state: SearchState | Mapping[str, Number],
     choice: Direction | str,
     *,
+    min: Number,
+    max: Number,
+    last_guess: Number | None = None,
     integer: bool = False,
 ) -> SearchState:
     """Apply one choice without calling Jev or mutating the caller's state.
@@ -100,9 +141,15 @@ def advance(
     In continuous mode, move the relevant bound to last_guess and halve
     the distance to the other bound. Integer mode excludes the rejected
     guess and takes the floor midpoint of the remaining inclusive range.
+    If last_guess is omitted or None, apply the choice to the bounds' midpoint.
     """
-    current = _state(state)
-    _validate_integer(current, integer)
+    current = _initial_state(min=min, max=max, last_guess=last_guess, integer=integer)
+    return _advance(current, choice, integer=integer)
+
+
+def _advance(
+    current: SearchState, choice: Direction | str, *, integer: bool
+) -> SearchState:
     direction = Direction(choice)
     if direction == Direction.EXACTLY:
         return current
@@ -118,43 +165,46 @@ def advance(
             raise SearchExhaustedError("lower at min leaves no possible answer")
         high = guess - 1 if integer else guess
 
-    if integer:
-        midpoint = (low + high) // 2
-    else:
-        # Avoid overflowing high-low when bounds straddle zero.
-        try:
-            midpoint = low / 2 + high / 2 if low < 0 < high else low + (high - low) / 2
-        except OverflowError as exc:
-            raise SearchExhaustedError(
-                "bounds exceed floating-point range; use integer mode"
-            ) from exc
+    midpoint = _midpoint(low, high, integer)
     if midpoint == guess or not low <= midpoint <= high:
         raise SearchExhaustedError("no representable midpoint makes progress")
     return SearchState(max=high, min=low, last_guess=midpoint)
 
 
 def bisect(
-    state: SearchState | Mapping[str, Number],
     question: str,
     *,
+    min: Number,
+    max: Number,
+    last_guess: Number | None = None,
     client: TypeSafeClient | None = None,
     model: str = "jev-latest",
-    max_turns: int = MAX_TURNS,
+    config: SearchConfig | None = None,
     integer: bool = False,
 ) -> SearchResult:
     """Ask Jev higher/lower/exactly until exactly or at most 20 turns.
 
-    Supply a numeric question, e.g. "How many minutes are in three hours?".
+    Supply a numeric question and keyword-only min and max bounds.
+    The initial guess is the bounds' midpoint (floor midpoint in integer
+    mode), and its evaluation counts as turn one. Equal bounds still require
+    Jev to select exactly. Integer mode requires int bounds; invalid bounds
+    are rejected before an API call. A supplied last_guess is an optional
+    starting-point override; omitted or None uses the midpoint.
+
+    Fractional mode may not reach an endpoint or every real number exactly.
+    Omit config to allow up to 20 guesses, or pass SearchConfig(max_turns=5)
+    for a smaller limit. Returns answer=None on max_turns or stalled rather
+    than assuming success.
     A caller-supplied client stays open; an internally created client is
     closed on every exit. API failures propagate. SDK retries are disabled
     for these calls so the turn limit also bounds HTTP evaluation attempts.
     """
-    current = _state(state)
-    _validate_integer(current, integer)
+    settings = SearchConfig() if config is None else config
+    if not isinstance(settings, SearchConfig):
+        raise ValueError("config must be a SearchConfig or None")
+    current = _initial_state(min=min, max=max, last_guess=last_guess, integer=integer)
     if not isinstance(question, str) or not question.strip():
         raise ValueError("question must be a nonempty string")
-    if type(max_turns) is not int or not 1 <= max_turns <= MAX_TURNS:
-        raise ValueError(f"max_turns must be an integer from 1 to {MAX_TURNS}")
     if not isinstance(model, str) or not model.strip():
         raise ValueError("model must be a nonempty string")
 
@@ -177,7 +227,7 @@ def bisect(
     active_client = TypeSafeClient() if client is None else client
     history: list[Turn] = []
     try:
-        for turn in range(max_turns):
+        for turn in range(settings.max_turns):
             response = active_client.system_one(
                 state=current.to_dict(),
                 questions={"direction": comparison},
@@ -197,10 +247,10 @@ def bisect(
             )
             if direction == Direction.EXACTLY:
                 return SearchResult(current, tuple(history), "exactly")
-            if turn + 1 == max_turns:
+            if turn + 1 == settings.max_turns:
                 return SearchResult(current, tuple(history), "max_turns")
             try:
-                current = advance(current, direction, integer=integer)
+                current = _advance(current, direction, integer=integer)
             except SearchExhaustedError:
                 return SearchResult(current, tuple(history), "stalled")
     finally:
