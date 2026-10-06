@@ -3,6 +3,7 @@
 from .search import (
     MAX_TURNS,
     Direction,
+    MaxTurnsExceededError,
     SearchConfig,
     SearchExhaustedError,
     SearchResult,
@@ -15,6 +16,7 @@ from .search import (
 __all__ = [
     "MAX_TURNS",
     "Direction",
+    "MaxTurnsExceededError",
     "SearchConfig",
     "SearchExhaustedError",
     "SearchResult",
