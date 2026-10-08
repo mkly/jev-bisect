@@ -7,11 +7,27 @@ name = "jev-bisect"
 version = "0.1.0"
 description = "Find numeric answers with Jev's higher/lower/exactly choices."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = ["typesafe-sdk>=0.7.2,<0.8"]
+keywords = ["jev", "typesafe", "bisection", "binary-search"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Repository = "https://github.com/mkly/jev-bisect"
+Issues = "https://github.com/mkly/jev-bisect/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.12", "build>=1"]
+release = ["build>=1", "hatchling>=1.27", "twine>=6"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/jev_bisect"]

@@ -17,11 +17,11 @@ export TYPESAFE_API_KEY="your-typesafe-api-key"
 from jev_bisect import bisect
 
 result = bisect(
-    "How many centimeters are in three quarters of a meter?",
+    "How many slices in a pizza?",
     min=0,
     max=100,
 )
-print(result.answer)  # 75 if Jev selects higher, then exactly
+print(result.answer)
 print(result.turns)
 ```
 
@@ -158,3 +158,28 @@ python -m build
 
 Tests use deterministic responses and a mock HTTP transport, requiring no API
 key or network requests.
+
+## Prepare a release
+
+Update `version` in `pyproject.toml` for each new release, then build and check
+the wheel and source distribution:
+
+```sh
+pip install -e '.[dev,release]'
+pytest
+ruff check .
+python -m build
+python -m twine check --strict dist/*
+```
+
+These commands prepare files locally. When ready to publish, set
+`TWINE_USERNAME=__token__` and `TWINE_PASSWORD` to a PyPI API token, then upload
+only the files for that release:
+
+```sh
+python -m twine upload dist/jev_bisect-0.1.0-py3-none-any.whl dist/jev_bisect-0.1.0.tar.gz
+```
+
+## License
+
+MIT; see [LICENSE](LICENSE).
