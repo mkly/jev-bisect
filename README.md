@@ -6,10 +6,10 @@ using the official [TypeSafe Python SDK](https://docs.typesafe.ai/sdk/python).
 
 ## Install and run
 
-Requires Python 3.10 or newer. From this directory:
+Requires Python 3.10 or newer. Install from PyPI:
 
 ```sh
-pip install -e .
+pip install jev-bisect
 export TYPESAFE_API_KEY="your-typesafe-api-key"
 ```
 
