@@ -150,13 +150,18 @@ def _value(ticks: int, config: SearchConfig) -> Number:
 
 
 def _initial_state(
-    *, min: Number, max: Number, last_guess: Number | None, config: SearchConfig
+    *,
+    min: Number,
+    max: Number,
+    last_guess: Number | None,
+    config: SearchConfig,
+    allow_singleton: bool = False,
 ) -> SearchState:
     # Validate the bounds before computing the initial guess.
     bounds = SearchState(
         max=max, min=min, last_guess=min if last_guess is None else last_guess
     )
-    if bounds.min == bounds.max:
+    if bounds.min == bounds.max and not allow_singleton:
         raise ValueError("min must be strictly less than max")
     low = _ticks(bounds.min, config, ceiling=True)
     high = _ticks(bounds.max, config)
@@ -194,9 +199,17 @@ def advance(
     Exclude the rejected guess and take the floor midpoint of the remaining
     steps at config.precision, without binary floating-point arithmetic.
     If last_guess is omitted or None, apply the choice to the bounds' midpoint.
+    Equal bounds are accepted with an explicit last_guess to continue a search
+    that has narrowed to one candidate.
     """
     settings = _settings(config)
-    current = _initial_state(min=min, max=max, last_guess=last_guess, config=settings)
+    current = _initial_state(
+        min=min,
+        max=max,
+        last_guess=last_guess,
+        config=settings,
+        allow_singleton=last_guess is not None,
+    )
     return _advance(current, choice, config=settings)
 
 

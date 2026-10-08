@@ -150,6 +150,19 @@ def test_advance_with_omitted_guess_applies_choice_to_midpoint():
     }
 
 
+@pytest.mark.parametrize("precision", [1, 0.01, 2.5])
+@pytest.mark.parametrize("choice", ["exactly", "higher", "lower"])
+def test_advance_continues_after_narrowing_to_one_candidate(precision, choice):
+    config = SearchConfig(precision=precision)
+    state = advance("higher", min=0, max=2 * precision, config=config)
+    assert state.min == state.max == state.last_guess == 2 * precision
+    if choice == "exactly":
+        assert advance(choice, **state.to_dict(), config=config) == state
+    else:
+        with pytest.raises(SearchExhaustedError):
+            advance(choice, **state.to_dict(), config=config)
+
+
 @pytest.mark.parametrize("precision", [0.01, 1])
 def test_equal_bounds_are_rejected_before_request(precision):
     client = Oracle(3)

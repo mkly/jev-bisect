@@ -91,7 +91,7 @@ return floats. Trailing zeros are not preserved.
 
 | Exception | Condition |
 | --- | --- |
-| `ValueError` | Invalid bounds (including `min == max`), config, question, model, or starting guess. |
+| `ValueError` | Invalid bounds (`bisect` requires `min < max`), config, question, model, or starting guess. |
 | `SearchExhaustedError` | No candidate within bounds, no possible next guess, or a candidate cannot be represented as a float at the configured precision. |
 | `MaxTurnsExceededError` | No `exactly` decision within `max_turns`. |
 
@@ -116,6 +116,9 @@ else:
 `advance` performs one step without an API call and returns a `SearchState`.
 When `last_guess` is omitted, the choice applies to the bounds' midpoint.
 Supply the returned bounds and guess for the next step, using the same config.
+If the returned bounds are equal, pass `last_guess` to evaluate the remaining
+candidate: `exactly` returns that state, while `higher` or `lower` raises
+`SearchExhaustedError`. Without `last_guess`, `advance` requires `min < max`.
 
 ```python
 from jev_bisect import advance
